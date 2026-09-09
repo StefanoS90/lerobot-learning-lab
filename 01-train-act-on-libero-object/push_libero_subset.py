@@ -26,7 +26,8 @@ so it renders in the Hub's dataset viewer.
 
 Task selection (pick exactly one):
     --task-text "<exact task language string>"
-    --suite-task <suite> <task_id>   (resolved via the `libero` benchmark, requires lerobot[libero])
+    --suite-task <suite> <task_id>   (one task, resolved via the `libero` benchmark)
+    --suite <suite>                  (every task in the suite, e.g. all of libero_object)
     --episodes 0,4,12                (explicit episode indices, bypasses task resolution)
 
 Usage:
@@ -45,6 +46,12 @@ Usage:
     python examples/dataset/push_libero_subset.py \
         --new-repo-id ${HF_USER}/libero_object_task0 \
         --suite-task libero_object 0 \
+        --push
+
+    # Every task in the libero_object suite (all objects, still just that one suite).
+    python examples/dataset/push_libero_subset.py \
+        --new-repo-id ${HF_USER}/libero_object_all \
+        --suite libero_object \
         --push
 
     # Select by exact task text instead, and push privately.
@@ -93,16 +100,20 @@ def fix_action_state_names(dataset: LeRobotDataset) -> None:
     write_info(dataset.meta.info, dataset.meta.root)
 
 
-def resolve_suite_task_text(suite: str, task_id: int) -> str:
-    """Resolve a LIBERO (suite, task_id) pair -- the same numbering used by
-    `lerobot-eval --env.task_ids` -- to its language instruction string."""
+def _get_suite(suite: str):
     require_package("hf-libero", extra="libero", import_name="libero")
     from libero.libero import benchmark
 
     bench = benchmark.get_benchmark_dict()
     if suite not in bench:
         raise ValueError(f"Unknown LIBERO suite '{suite}'. Available: {', '.join(sorted(bench.keys()))}")
-    suite_obj = bench[suite]()
+    return bench[suite]()
+
+
+def resolve_suite_task_text(suite: str, task_id: int) -> str:
+    """Resolve a LIBERO (suite, task_id) pair -- the same numbering used by
+    `lerobot-eval --env.task_ids` -- to its language instruction string."""
+    suite_obj = _get_suite(suite)
     if not (0 <= task_id < len(suite_obj.tasks)):
         raise ValueError(
             f"task_id {task_id} out of range for suite '{suite}' (has {len(suite_obj.tasks)} tasks)."
@@ -110,22 +121,36 @@ def resolve_suite_task_text(suite: str, task_id: int) -> str:
     return suite_obj.tasks[task_id].language
 
 
-def episodes_for_task_text(dataset: LeRobotDataset, task_text: str) -> list[int]:
-    """Find every episode whose frames are labeled with `task_text`.
+def resolve_suite_task_texts(suite: str) -> list[str]:
+    """Resolve every task in a LIBERO suite to its language instruction string."""
+    return [task.language for task in _get_suite(suite).tasks]
+
+
+def episodes_for_task_texts(dataset: LeRobotDataset, task_texts: list[str]) -> list[int]:
+    """Find every episode whose frames are labeled with any of `task_texts`.
 
     The dataset's episode metadata has no task column (only frame rows carry
     `task_index`), so this scans the frame-level `episode_index`/`task_index` columns.
     """
-    task_index = dataset.meta.get_task_index(task_text)
-    if task_index is None:
-        raise ValueError(
-            f"Task {task_text!r} not found in dataset '{dataset.repo_id}'. "
-            f"Known tasks: {list(dataset.meta.tasks.index)}"
-        )
+    task_indices = set()
+    for text in task_texts:
+        task_index = dataset.meta.get_task_index(text)
+        if task_index is None:
+            raise ValueError(
+                f"Task {text!r} not found in dataset '{dataset.repo_id}'. "
+                f"Known tasks: {list(dataset.meta.tasks.index)}"
+            )
+        task_indices.add(task_index)
     table = dataset.select_columns(["episode_index", "task_index"])
-    episodes = sorted({int(ep) for ep, idx in zip(table["episode_index"], table["task_index"], strict=True) if idx == task_index})
+    episodes = sorted(
+        {
+            int(ep)
+            for ep, idx in zip(table["episode_index"], table["task_index"], strict=True)
+            if int(idx) in task_indices
+        }
+    )
     if not episodes:
-        raise ValueError(f"No episodes found for task_index {task_index} ({task_text!r}).")
+        raise ValueError(f"No episodes found for tasks: {task_texts}")
     return episodes
 
 
@@ -155,6 +180,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
         nargs=2,
         metavar=("SUITE", "TASK_ID"),
         help="LIBERO suite name and task_id, e.g. --suite-task libero_object 0.",
+    )
+    selection.add_argument(
+        "--suite",
+        help="LIBERO suite name; selects every task in it, e.g. --suite libero_object.",
     )
     selection.add_argument("--episodes", help="Explicit comma-separated episode indices, e.g. 0,4,12.")
 
@@ -191,12 +220,15 @@ def main():
             raise ValueError(f"Episode indices out of range for this dataset: {invalid}")
     else:
         if args.task_text:
-            task_text = args.task_text
-        else:
+            task_texts = [args.task_text]
+        elif args.suite_task:
             suite, task_id = args.suite_task
-            task_text = resolve_suite_task_text(suite, int(task_id))
-            print(f"Resolved {suite} task_id={task_id} -> {task_text!r}")
-        episodes = episodes_for_task_text(dataset, task_text)
+            task_texts = [resolve_suite_task_text(suite, int(task_id))]
+            print(f"Resolved {suite} task_id={task_id} -> {task_texts[0]!r}")
+        else:
+            task_texts = resolve_suite_task_texts(args.suite)
+            print(f"Resolved suite {args.suite!r} -> {len(task_texts)} tasks")
+        episodes = episodes_for_task_texts(dataset, task_texts)
 
     n_frames = sum(int(dataset.meta.episodes[e]["length"]) for e in episodes)
     print(f"Selected {len(episodes)} episodes / {n_frames} frames for the subset.")
