@@ -43,10 +43,18 @@ The shape is as informative as the number. Almost everything sits on the robot's
 between episodes. The entire right-hand side of the reachable workspace is white.
 
 The two sliders redraw continuously: **z bounds** sets both edges of the slab, **grid**
-changes the cell size. Hovering a cell reports its numbers in the status line at the
-bottom, and clicking one lists the episodes that passed through it — and pops up each of
-their opening camera frames, which is how you tell "the arm always parks here" apart from
-"the cube was always here".
+changes the cell size. Hovering a cell reports its numbers in the status line at the bottom.
+
+Clicking one goes further: it lists the episodes that passed through that cell and pops up
+each of their opening camera frames.
+
+![the episodes behind one cell](assets/popup.png)
+
+That is what turns a heatmap into an explanation. Eighteen episodes pass through this one
+cell just in front of the base — and the cube sits somewhere different in every frame, so
+the cell is where the arm parks between episodes, not anything the task put there. Cells
+further out tell the opposite story: the same cube position in frame after frame, because
+that is exactly where the cube was.
 
 ## Comparing two datasets
 
