@@ -22,21 +22,24 @@ binned in Cartesian space, with a slider to walk up through the workspace height
 
 ![the interactive viewer](assets/viewer.png)
 
-The main panel is a top-down x–y map of one horizontal slab of the workspace — here
-`z ∈ [0.012, 0.050)` m, a 38 mm slice just above the table. The robot is drawn at the
-origin with a pale arrow along the direction it faces, so it is always obvious which side
-of the arm the data is on.
+The main panel is a top-down x–y map of one horizontal slab of the workspace — by default
+`z ∈ [-0.005, 0.005)` m, a 10 mm band straddling table height, in 13.5 mm cells. The robot
+is drawn at the origin with a pale arrow along the direction it faces, so it is always
+obvious which side of the arm the data is on.
 
 Three states are distinguished, which is the point of the whole exercise:
 
 - **grey** — the arm physically cannot reach this cell at this height
 - **white** — reachable, but this dataset never went there
-- **colour** — visited, shaded by how many frames
+- **colour** — visited, shaded by how many *distinct episodes* went through it
 
 Without the grey, a coverage percentage would be meaningless: you would be measuring
-against a bounding box rather than against what the arm can actually do. Here 11,473 frames
-land in this slab and cover **15.6% of the reachable area** — and across all six slices of
-the workspace the figure peaks at 17.2%.
+against a bounding box rather than against what the arm can actually do. Here 3,442 frames
+land in this thin band and cover **10.4% of the reachable area**; taking the whole workspace
+in six thicker slices, the figure peaks at 27%.
+
+Colouring by episodes rather than frame count is the more honest default — a cell the arm
+merely dwelt in for one slow episode looks busy by frame count, but stays dark here.
 
 The shape is as informative as the number. Almost everything sits on the robot's left
 (+y) in a blob around y ≈ 0.10–0.20, plus a cluster near the base where the arm parks
@@ -50,7 +53,7 @@ each of their opening camera frames.
 
 ![the episodes behind one cell](assets/popup.png)
 
-That is what turns a heatmap into an explanation. Eighteen episodes pass through this one
+That is what turns a heatmap into an explanation. Thirteen episodes pass through this one
 cell just in front of the base — and the cube sits somewhere different in every frame, so
 the cell is where the arm parks between episodes, not anything the task put there. Cells
 further out tell the opposite story: the same cube position in frame after frame, because
@@ -68,7 +71,7 @@ panel is the diff — `B \ A`, the cells B visited that A never did — recomput
 either slider.
 
 Against the 146-episode `object-dropping-cube-grabbing-in-the-wild`, the smaller set's
-15.5% becomes 24.1%, and the diff isolates exactly what is new: **3,631 frames in 330 cells**.
+10.6% becomes 17.8%, and the diff isolates exactly what is new: **1,400 frames in 65 cells**.
 Reading where they fall matters more than the count — they are not a rim around the
 existing blob, they are scattered through the middle *and* down into the y < 0 half that
 `consistent-grabbing-merged` barely touched. Neither of the first two panels tells you that
@@ -87,22 +90,23 @@ L=../../lerobot   # or wherever your lerobot checkout is
 
 # One dataset.
 uv run --project $L python ee_coverage.py \
-    ssabats/object-dropping-cube-consistent-grabbing-merged \
-    --interactive --z-bounds 0.012,0.050 --bins 64 --log
+    ssabats/object-dropping-cube-consistent-grabbing-merged --interactive
 
 # Two datasets: adds per-dataset panels and a "B \ A" entry showing what B added.
 uv run --project $L python ee_coverage.py \
     ssabats/object-dropping-cube-consistent-grabbing-merged \
     ssabats/object-dropping-cube-grabbing-in-the-wild \
-    --interactive --z-bounds 0.012,0.050 --bins 64 --log
+    --interactive
 
 # Static figures + summary.txt instead of a window.
 uv run --project $L python ee_coverage.py \
     ssabats/object-dropping-cube-consistent-grabbing-merged \
-    --z-slices 6 --bins 64 --panel-color count --log --out-dir assets/
+    --z-slices 6 --out-dir assets/
 ```
 
-`--panel-color` also takes `dwell`, `episodes`, `tilt`, `tilt_spread`, `roll_spread` and
+The defaults are a 10 mm slab at table height, 13.5 mm cells, and a log colour scale over
+distinct episodes; `--z-bounds`, `--bins`, `--panel-color` and `--no-log` override them.
+`--panel-color` also takes `count`, `dwell`, `tilt`, `tilt_spread`, `roll_spread` and
 `gripper`; `--source action` bins the commanded pose rather than the measured one; `--rerun`
 opens a 3D aggregate view instead. `python so101_fk.py --self-test` checks the kinematics
 before you trust any of it.

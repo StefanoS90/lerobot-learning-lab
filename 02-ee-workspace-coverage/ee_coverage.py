@@ -888,7 +888,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--approach-axis", choices=("x", "y", "z"), default="z",
                         help="Which tool axis counts as the approach direction (default: z).")
 
-    parser.add_argument("--bins", type=int, default=64, help="Bins per axis in the top view (default: 64).")
+    parser.add_argument("--bins", type=int, default=32, help="Bins per axis in the top view (default: 32, ~13 mm cells).")
     parser.add_argument("--z-slices", type=int, default=6, help="Number of z slices (default: 6).")
     parser.add_argument("--z-min", type=float, default=None, help="Lowest slice edge (default: 1st percentile).")
     parser.add_argument("--z-max", type=float, default=None, help="Highest slice edge (default: 99th percentile).")
@@ -902,15 +902,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--diff", default=None, help="'B:A' -- show coverage in B that is absent from A.")
     parser.add_argument("--no-include-base", dest="include_base", action="store_false",
                         help="Crop to the reached workspace instead of always showing the robot base.")
-    parser.add_argument("--z-bounds", default=None,
-                        help="Initial slab for the viewer, e.g. '0.05,0.09' (default: the first slice).")
+    parser.add_argument("--z-bounds", default="-0.005,0.005",
+                        help="Initial slab for the viewer, e.g. '0.05,0.09' "
+                             "(default: -0.005,0.005 -- a 10 mm band about table height).")
     parser.add_argument("--rest-pose", choices=("home", "zero", "none"), default="home",
                         help="Arm pose drawn for reference: the median episode-start pose, the URDF "
                              "zero config, or nothing (default: home).")
 
-    parser.add_argument("--panel-color", choices=CHANNELS, default="count",
-                        help="What the colour map means (default: count).")
-    parser.add_argument("--log", action="store_true", help="Log colour scale (count/dwell/episodes).")
+    parser.add_argument("--panel-color", choices=CHANNELS, default="episodes",
+                        help="What the colour map means (default: episodes).")
+    parser.add_argument("--log", action=argparse.BooleanOptionalAction, default=True,
+                        help="Log colour scale for count/dwell/episodes (default: on).")
     parser.add_argument("--cmap", default="viridis", help="Matplotlib colormap name.")
     parser.add_argument("--quiver", action="store_true",
                         help="Overlay mean approach direction as arrows on the top view.")

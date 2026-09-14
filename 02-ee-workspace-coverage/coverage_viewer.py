@@ -120,7 +120,7 @@ class CoverageViewer:
         self.channel = channel
         self.log = log
         self.show_mask = model.reach_volume is not None
-        self.fixed_scale = True
+        self.fixed_scale = False
         self.cmap = make_cmap(cmap)
         self.blit = blit
         self.show_frames = show_frames
