@@ -23,7 +23,7 @@ binned in Cartesian space, with a slider to walk up through the workspace height
 ![the interactive viewer](assets/viewer.png)
 
 The main panel is a top-down x–y map of one horizontal slab of the workspace — by default
-`z ∈ [-0.005, 0.005)` m, a 10 mm band straddling table height, in 13.5 mm cells. The robot
+`z ∈ [-0.030, 0.030)` m, a 60 mm band straddling table height, in 13.5 mm cells. The robot
 is drawn at the origin with a pale arrow along the direction it faces, so it is always
 obvious which side of the arm the data is on.
 
@@ -34,9 +34,9 @@ Three states are distinguished, which is the point of the whole exercise:
 - **colour** — visited, shaded by how many *distinct episodes* went through it
 
 Without the grey, a coverage percentage would be meaningless: you would be measuring
-against a bounding box rather than against what the arm can actually do. Here 3,442 frames
-land in this thin band and cover **10.4% of the reachable area**; taking the whole workspace
-in six thicker slices, the figure peaks at 27%.
+against a bounding box rather than against what the arm can actually do. Here 13,889 frames
+land in this band and cover **20.2% of the reachable area** — a third of the dataset's frames,
+and still four fifths of the table at that height never touched.
 
 Colouring by episodes rather than frame count is the more honest default — a cell the arm
 merely dwelt in for one slow episode looks busy by frame count, but stays dark here.
@@ -53,8 +53,8 @@ each of their opening camera frames.
 
 ![the episodes behind one cell](assets/popup.png)
 
-That is what turns a heatmap into an explanation. Thirteen episodes pass through this one
-cell just in front of the base — and the cube sits somewhere different in every frame, so
+That is what turns a heatmap into an explanation. Twenty-seven episodes pass through this
+one cell just in front of the base — and the cube sits somewhere different in every frame, so
 the cell is where the arm parks between episodes, not anything the task put there. Cells
 further out tell the opposite story: the same cube position in frame after frame, because
 that is exactly where the cube was.
@@ -71,7 +71,7 @@ panel is the diff — `B \ A`, the cells B visited that A never did — recomput
 either slider.
 
 Against the 146-episode `object-dropping-cube-grabbing-in-the-wild`, the smaller set's
-10.6% becomes 17.8%, and the diff isolates exactly what is new: **1,400 frames in 65 cells**.
+20.3% becomes 30.7%, and the diff isolates exactly what is new: **4,300 frames in 93 cells**.
 Reading where they fall matters more than the count — they are not a rim around the
 existing blob, they are scattered through the middle *and* down into the y < 0 half that
 `consistent-grabbing-merged` barely touched. Neither of the first two panels tells you that
@@ -104,7 +104,7 @@ uv run --project $L python ee_coverage.py \
     --z-slices 6 --out-dir assets/
 ```
 
-The defaults are a 10 mm slab at table height, 13.5 mm cells, and a log colour scale over
+The defaults are a 60 mm slab at table height, 13.5 mm cells, and a log colour scale over
 distinct episodes; `--z-bounds`, `--bins`, `--panel-color` and `--no-log` override them.
 `--panel-color` also takes `count`, `dwell`, `tilt`, `tilt_spread`, `roll_spread` and
 `gripper`; `--source action` bins the commanded pose rather than the measured one; `--rerun`

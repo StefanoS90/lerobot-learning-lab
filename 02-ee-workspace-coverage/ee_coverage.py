@@ -902,9 +902,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--diff", default=None, help="'B:A' -- show coverage in B that is absent from A.")
     parser.add_argument("--no-include-base", dest="include_base", action="store_false",
                         help="Crop to the reached workspace instead of always showing the robot base.")
-    parser.add_argument("--z-bounds", default="-0.005,0.005",
+    parser.add_argument("--z-bounds", default="-0.03,0.03",
                         help="Initial slab for the viewer, e.g. '0.05,0.09' "
-                             "(default: -0.005,0.005 -- a 10 mm band about table height).")
+                             "(default: -0.03,0.03 -- a 60 mm band about table height).")
     parser.add_argument("--rest-pose", choices=("home", "zero", "none"), default="home",
                         help="Arm pose drawn for reference: the median episode-start pose, the URDF "
                              "zero config, or nothing (default: home).")
