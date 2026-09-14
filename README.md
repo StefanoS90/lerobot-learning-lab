@@ -7,3 +7,4 @@ Each numbered folder is one experiment/chapter, with its own write-up and any sc
 ## Chapters
 
 1. [Train ACT on a single LIBERO task](01-train-act-on-libero-object/README.md)
+2. [Visualising end-effector workspace coverage](02-ee-workspace-coverage/README.md)
