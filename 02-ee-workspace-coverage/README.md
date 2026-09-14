@@ -53,11 +53,18 @@ each of their opening camera frames.
 
 ![the episodes behind one cell](assets/popup.png)
 
-That is what turns a heatmap into an explanation. Twenty-seven episodes pass through this
-one cell just in front of the base — and the cube sits somewhere different in every frame, so
-the cell is where the arm parks between episodes, not anything the task put there. Cells
-further out tell the opposite story: the same cube position in frame after frame, because
-that is exactly where the cube was.
+That is what turns a heatmap into an explanation. The frames open in their own window, so
+they can sit beside the maps rather than covering them.
+
+Here one 13.5 mm cell out on the robot's left — x = 0.243, y = 0.109, in a 43 mm slab at
+table height — was crossed by four episodes of `grabbing-in-the-wild` (19, 32, 48 and 140),
+and their opening frames show the cube starting somewhere different every time. So this cell
+is transit: somewhere the arm passes through, not somewhere the task put it. Cells that *are*
+task-driven tell the opposite story — the same cube position frame after frame, because that
+is exactly where the cube was.
+
+Note the red marker in both panels behind the pop-up: clicking marks the same cell on every
+panel, so you can read one location across the whole comparison at once.
 
 ## Comparing two datasets
 

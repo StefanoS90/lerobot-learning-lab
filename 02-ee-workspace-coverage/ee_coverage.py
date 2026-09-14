@@ -888,7 +888,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--approach-axis", choices=("x", "y", "z"), default="z",
                         help="Which tool axis counts as the approach direction (default: z).")
 
-    parser.add_argument("--bins", type=int, default=32, help="Bins per axis in the top view (default: 32, ~13 mm cells).")
+    parser.add_argument("--bins", type=int, default=32,
+                        help="Bins per axis in the top view (default: 32, ~13 mm cells).")
     parser.add_argument("--z-slices", type=int, default=6, help="Number of z slices (default: 6).")
     parser.add_argument("--z-min", type=float, default=None, help="Lowest slice edge (default: 1st percentile).")
     parser.add_argument("--z-max", type=float, default=None, help="Highest slice edge (default: 99th percentile).")
