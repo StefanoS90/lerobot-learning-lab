@@ -177,7 +177,8 @@ class CoverageModel:
     reach_points: np.ndarray | None = field(default=None, repr=False)
     reach_min_thickness_m: float = 0.008
     chain: object | None = None
-    rest_pose_deg: np.ndarray | None = None
+    rest_pose: RestPose | None = None
+    robot_style: str = "cad"  # how the arm is drawn: "cad", "skeleton" or "none"
     _binned: dict[str, _Binned] = field(default_factory=dict, repr=False)
 
     @property
@@ -614,6 +615,7 @@ def build_coverage(
     rest_pose: str = "home",
     reach_z_bins: int = 48,
     reach_store: int = 2_000_000,
+    robot_style: str = "cad",
 ) -> CoverageModel:
     """Bin every dataset onto one shared x-y grid and sample the reachable volume once."""
     pos_all = np.concatenate([p.pos for p in all_poses])
@@ -679,7 +681,8 @@ def build_coverage(
         poses=poses_by_name,
         diff=diff,
         chain=chain,
-        rest_pose_deg=_rest_pose(all_poses, rest_pose),
+        rest_pose=_rest_pose(all_poses, rest_pose),
+        robot_style=robot_style,
         _binned=binned,
     )
 
@@ -795,22 +798,55 @@ def _sample_reach_points(
     return mask.reshape((nz, ny, nx)), points
 
 
-def _rest_pose(all_poses: list[EEPoses], mode: str) -> np.ndarray | None:
-    """The joint vector to draw as the arm's reference pose on every panel.
+@dataclass
+class RestPose:
+    """The configuration the arm is drawn in, and where it came from."""
 
-    "home" uses the median configuration at the first frame of every episode, which is the pose
-    the operator actually parks the arm in -- far more informative than the URDF zero config,
-    which has the arm stuck straight out.
+    q_deg: np.ndarray
+    gripper: float = 0.0  # dataset units, 0 closed .. 100 open
+    source: str | None = None  # dataset repo id it was taken from, if any
+    episode: int | None = None
+
+
+def _rest_pose(all_poses: list[EEPoses], mode: str, max_starts: int = 2000) -> RestPose | None:
+    """The pose to draw the arm in on every panel.
+
+    "home" picks the *medoid* of every episode's first frame, pooled across the loaded datasets:
+    the real starting configuration whose summed joint-space distance to all the others is
+    smallest. Two properties matter:
+
+    - it is robust -- episodes that start somewhere unusual (arm raised, mid-task) barely move it,
+      just as with a median;
+    - unlike a per-joint median, it is a pose the arm genuinely held, so the drawn arm is always
+      physically consistent. A per-joint median picks each joint independently and can in
+      principle assemble a configuration no episode ever had.
+
+    "zero" is the URDF zero configuration, with the arm stuck straight out.
     """
     if mode == "none":
         return None
     if mode == "zero":
-        return np.zeros(all_poses[0].q_deg.shape[1])
-    starts = np.concatenate([
-        np.stack([p.q_deg[p.episode_index == e][0] for e in np.unique(p.episode_index)])
-        for p in all_poses
-    ])
-    return np.median(starts, axis=0)
+        return RestPose(q_deg=np.zeros(all_poses[0].q_deg.shape[1]))
+
+    rows, grippers, origin = [], [], []
+    for p in all_poses:
+        for e in np.unique(p.episode_index):
+            first = int(np.flatnonzero(p.episode_index == e)[0])
+            rows.append(p.q_deg[first])
+            grippers.append(float(p.gripper[first]))
+            origin.append((p.name, int(e)))
+    starts = np.stack(rows)
+
+    # O(n^2) in the number of episodes; subsample beyond a couple of thousand, which only
+    # happens for very large merged datasets.
+    candidates = np.arange(len(starts))
+    if len(starts) > max_starts:
+        candidates = np.random.default_rng(0).choice(len(starts), max_starts, replace=False)
+    sub = starts[candidates]
+    distance = np.linalg.norm(sub[:, None, :] - sub[None, :, :], axis=2).sum(axis=1)
+    k = int(candidates[int(np.argmin(distance))])
+    return RestPose(q_deg=starts[k].copy(), gripper=grippers[k], source=origin[k][0],
+                    episode=origin[k][1])
 
 
 def _short(repo_id: str) -> str:
@@ -907,8 +943,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
                         help="Initial slab for the viewer, e.g. '0.05,0.09' "
                              "(default: -0.03,0.03 -- a 60 mm band about table height).")
     parser.add_argument("--rest-pose", choices=("home", "zero", "none"), default="home",
-                        help="Arm pose drawn for reference: the median episode-start pose, the URDF "
-                             "zero config, or nothing (default: home).")
+                        help="Arm pose drawn for reference: the medoid episode-start pose (a real "
+                             "starting pose, closest to all the others), the URDF zero config, or "
+                             "nothing (default: home).")
+    parser.add_argument("--robot", choices=("cad", "skeleton", "none"), default="cad",
+                        help="Draw the arm as its CAD silhouette seen from above, as a joint "
+                             "skeleton, or not at all (default: cad).")
 
     parser.add_argument("--panel-color", choices=CHANNELS, default="episodes",
                         help="What the colour map means (default: episodes).")
@@ -976,6 +1016,7 @@ def main() -> None:
         seed=args.seed,
         include_base=args.include_base,
         rest_pose=args.rest_pose,
+        robot_style=args.robot,
         reach_store=args.reach_store,
     )
 

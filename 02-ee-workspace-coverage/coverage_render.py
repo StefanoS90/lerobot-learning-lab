@@ -80,22 +80,90 @@ def draw_panel_background(ax, model: CoverageModel, view: SliceView, show_mask: 
 ROBOT_COLOR = "#c62828"
 
 
-def draw_robot(ax, model: CoverageModel, arrow_frac: float = 0.46) -> tuple[list, list]:
+ROBOT_FILL = "#37474f"
+_ROBOT_NOTED: set[str] = set()
+
+
+def _cad_silhouette(ax, model: CoverageModel) -> tuple[list, list]:
+    """The robot's CAD meshes projected onto the table: (underlay artists, overlay artists).
+
+    The fill goes *under* the heatmap (zorder 1, between the reach backdrop at 0 and the data at
+    2), so it can never tint a data cell. A thin outline goes over the data, so the arm stays
+    readable where cells are dense. Raises if the URDF has no usable meshes.
+    """
+    from robot_outline import gripper_to_jaw_deg, top_view_mask
+
+    chain, rest = model.chain, model.rest_pose
+    urdf_path = getattr(chain, "urdf_path", None)
+    if urdf_path is None:
+        raise FileNotFoundError("no URDF path on the kinematic chain")
+    q = dict(zip(chain.joint_names, np.asarray(rest.q_deg, dtype=float), strict=True))
+    q["gripper"] = gripper_to_jaw_deg(urdf_path, rest.gripper)
+    mask = top_view_mask(urdf_path, q, model.extent)
+
+    x0, x1, y0, y1 = model.extent
+    xs = np.linspace(x0, x1, mask.shape[1])
+    ys = np.linspace(y0, y1, mask.shape[0])
+    # The fill is a filled contour -- a vector polygon -- rather than a translucent image. It looks
+    # the same, but re-blitting it costs ~0.3 ms instead of ~22 ms per panel: image resampling was
+    # the whole of the slowdown during a drag.
+    fill = ax.contourf(xs, ys, mask.astype(float), levels=[0.5, 1.5], colors=[ROBOT_FILL],
+                       alpha=0.30, zorder=1)
+    outline = ax.contour(xs, ys, mask.astype(float), levels=[0.5], colors=[ROBOT_FILL],
+                         linewidths=0.9, alpha=0.45, zorder=6)
+    return [fill], [outline]
+
+
+def _skeleton(ax, model: CoverageModel) -> list:
+    """The arm as a polyline through its joint origins -- the fallback when meshes are missing."""
+    links = model.chain.fk_links(np.deg2rad(np.asarray(model.rest_pose.q_deg, dtype=float))[None, :])[0]
+    artists = []
+    artists += ax.plot(links[:, 0], links[:, 1], "-", color="white", lw=4.0,
+                       solid_capstyle="round", zorder=6)
+    artists += ax.plot(links[:, 0], links[:, 1], "-", color=ROBOT_COLOR, lw=2.0, alpha=0.95,
+                       solid_capstyle="round", zorder=7)
+    artists += ax.plot(links[1:-1, 0], links[1:-1, 1], "o", color=ROBOT_COLOR, ms=2.8, zorder=8)
+    artists += ax.plot(links[-1, 0], links[-1, 1], "o", mfc="white", mec=ROBOT_COLOR, ms=5.5,
+                       mew=1.4, zorder=8)
+    return artists
+
+
+def draw_robot(ax, model: CoverageModel, arrow_frac: float = 0.46) -> tuple[list, list, list]:
     """Show where the robot is and which way it faces, on every top-view panel.
 
     A coverage heatmap with no robot in it is impossible to orient: you cannot tell whether the
-    data sits to the arm's left or right. So this draws a long pale heading arrow along +x
-    underneath everything, the arm itself projected top-down at its reference pose, and the base
-    at the origin -- which together make "the data is all on one side" legible at a glance.
+    data sits to the arm's left or right. So this draws the robot itself at its reference pose --
+    by default its CAD silhouette seen from above -- plus a long pale heading arrow along +x and
+    the base at the origin.
+
+    Returns (underlay, artists, labels): the underlay sits beneath the heatmap, the artists above
+    it, and the text labels are split out because they are the expensive part to redraw.
     """
     x0, x1, y0, y1 = model.extent
     span = x1 - x0
+    underlay: list = []
     artists: list = []
-    # The text labels are split out because they are the expensive part to redraw, and in a
-    # side-by-side comparison every panel would otherwise repeat the same four words.
     labels: list = []
 
-    # Heading arrow: long and pale, and drawn first so the arm reads on top of it.
+    # The arm at its reference pose, projected onto the table.
+    style = getattr(model, "robot_style", "cad")
+    if model.chain is not None and model.rest_pose is not None and style != "none":
+        if style == "cad":
+            try:
+                under, over = _cad_silhouette(ax, model)
+                underlay += under
+                artists += over
+            except Exception as exc:  # noqa: BLE001 - missing meshes must not take the figure down
+                key = str(getattr(model.chain, "urdf_path", ""))
+                if key not in _ROBOT_NOTED:
+                    _ROBOT_NOTED.add(key)
+                    print(f"Could not draw the robot from its CAD meshes ({exc}); "
+                          "drawing the joint skeleton instead.")
+                style = "skeleton"
+        if style == "skeleton":
+            artists += _skeleton(ax, model)
+
+    # Heading arrow: long and pale.
     length = span * arrow_frac
     artists.append(ax.annotate(
         "", xy=(length, 0.0), xytext=(0.0, 0.0), zorder=4,
@@ -105,18 +173,6 @@ def draw_robot(ax, model: CoverageModel, arrow_frac: float = 0.46) -> tuple[list
     # Clear of the arm, which lies along the same line.
     labels.append(ax.text(length * 0.62, span * 0.045, "arm forward", color=ROBOT_COLOR,
                           fontsize=6.5, ha="center", va="bottom", alpha=0.6, zorder=9))
-
-    # The arm at its reference pose, projected onto the table.
-    chain, rest = model.chain, model.rest_pose_deg
-    if chain is not None and rest is not None:
-        links = chain.fk_links(np.deg2rad(np.asarray(rest, dtype=float))[None, :])[0]
-        artists += ax.plot(links[:, 0], links[:, 1], "-", color="white", lw=4.0,
-                           solid_capstyle="round", zorder=6)
-        artists += ax.plot(links[:, 0], links[:, 1], "-", color=ROBOT_COLOR, lw=2.0, alpha=0.95,
-                           solid_capstyle="round", zorder=7)
-        artists += ax.plot(links[1:-1, 0], links[1:-1, 1], "o", color=ROBOT_COLOR, ms=2.8, zorder=8)
-        artists += ax.plot(links[-1, 0], links[-1, 1], "o", mfc="white", mec=ROBOT_COLOR, ms=5.5,
-                           mew=1.4, zorder=8)
 
     # The base.
     artists += ax.plot(0, 0, marker="o", ms=9, mfc="white", mec=ROBOT_COLOR, mew=2.0, zorder=9)
@@ -131,7 +187,7 @@ def draw_robot(ax, model: CoverageModel, arrow_frac: float = 0.46) -> tuple[list
                           fontsize=6.5, ha="left", va="top", alpha=0.75, zorder=9))
     labels.append(ax.text(x0 + span * 0.012, y0 + span * 0.012, "right (−y)", color=ROBOT_COLOR,
                           fontsize=6.5, ha="left", va="bottom", alpha=0.75, zorder=9))
-    return artists, labels
+    return underlay, artists, labels
 
 
 def draw_quiver(ax, model: CoverageModel, view: SliceView, stride: int = 4):

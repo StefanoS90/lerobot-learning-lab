@@ -79,7 +79,8 @@ def _radio_labels(names: list[str]) -> list[str]:
 class _Panel:
     """One top-view map: its axes and the artists that change when the bounds move."""
 
-    def __init__(self, name: str, ax, bg_im, im, marker, robot_artists, robot_labels, note):
+    def __init__(self, name: str, ax, bg_im, im, marker, robot_artists, robot_labels, note,
+                 robot_underlay=()):
         self.name = name
         self.ax = ax
         self.bg_im = bg_im
@@ -87,14 +88,17 @@ class _Panel:
         self.marker = marker
         self.robot_artists = robot_artists
         self.robot_labels = robot_labels
+        self.robot_underlay = list(robot_underlay)
         self.note = note
         self.view = None
 
     @property
     def artists(self) -> list:
-        # Draw order: backdrop, data, robot on top of the data, then the selection marker.
+        # Draw order: backdrop, the robot's silhouette fill, data, the robot's outline and marks
+        # on top of the data, then the selection marker. The fill has to be re-blitted too: the
+        # opaque backdrop is redrawn every update and would otherwise paint over it.
         # Hidden labels are skipped -- text is by far the most expensive thing to re-draw.
-        return [self.bg_im, self.im, *self.robot_artists,
+        return [self.bg_im, *self.robot_underlay, self.im, *self.robot_artists,
                 *[t for t in self.robot_labels if t.get_visible()],
                 self.marker, self.ax.title,
                 *([self.note] if self.note.get_visible() else [])]
@@ -171,7 +175,7 @@ class CoverageViewer:
                 view.channels[self.channel], origin="lower", extent=model.extent,
                 cmap=self.cmap, norm=self.norm, interpolation="nearest", zorder=2,
             )
-            robot, robot_labels = draw_robot(ax, model)
+            robot_underlay, robot, robot_labels = draw_robot(ax, model)
             marker, = ax.plot([], [], marker="s", ms=9, mfc="none", mec="#ff1744",
                               mew=1.8, zorder=11)
             # Shown when a panel has nothing to draw, so an empty map reads as an answer rather
@@ -181,7 +185,8 @@ class CoverageViewer:
                            linespacing=1.6)
             ax.set_aspect("equal")
             ax.set_xlabel("x (m) — robot forward", fontsize=9)
-            panel = _Panel(name, ax, bg_im, im, marker, robot, robot_labels, note)
+            panel = _Panel(name, ax, bg_im, im, marker, robot, robot_labels, note,
+                           robot_underlay=robot_underlay)
             panel.view = view
             self.panels.append(panel)
 
@@ -435,7 +440,10 @@ class CoverageViewer:
             pct = f"{visited / int(view.reach.sum()):.1%} of reachable"
         else:
             pct = f"{visited} cells"
-        return f"{_elide(_short(panel.name), width)}\n{total} frames — {pct}\n"
+        # The trailing blank line only matches the diff panel's three-line title in comparison
+        # mode; on a single panel it would just push the title into the figure's heading.
+        pad = "\n" if len(self.visible_panels) > 1 else ""
+        return f"{_elide(_short(panel.name), width)}\n{total} frames — {pct}{pad}"
 
     def _empty_note(self, panel) -> str:
         """What to write across a panel that has nothing in it. Empty string when it has data.

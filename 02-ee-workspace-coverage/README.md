@@ -24,8 +24,19 @@ binned in Cartesian space, with a slider to walk up through the workspace height
 
 The main panel is a top-down x–y map of one horizontal slab of the workspace — by default
 `z ∈ [-0.030, 0.030)` m, a 60 mm band straddling table height, in 13.5 mm cells. The robot
-is drawn at the origin with a pale arrow along the direction it faces, so it is always
-obvious which side of the arm the data is on.
+itself is drawn in grey, seen from above: its actual CAD meshes from the URDF, placed with
+forward kinematics and projected onto the table, with a pale arrow along the direction it faces.
+It sits *under* the heatmap, with only a faint outline on top, so it never tints a data cell
+but always makes clear which side of the arm the data is on.
+
+The arm is drawn in its **parked pose**, and which pose that is deserves a sentence, because
+not every episode starts in the same place. Of the 146 episodes in `grabbing-in-the-wild`, 60%
+start within 20 mm of each other but 14% start more than 100 mm away — `shoulder_lift` alone
+starts anywhere from −102° to +40°. So the drawn pose is the *medoid* of all the episodes'
+opening frames: the real starting configuration closest, in joint space, to all the others.
+Outliers barely move it, and unlike a per-joint median — which picks each joint independently
+and can assemble a configuration no episode ever had — it is always a pose the arm genuinely
+held. Here it is episode 10's opening pose, gripper included.
 
 Three states are distinguished, which is the point of the whole exercise:
 
@@ -56,15 +67,20 @@ each of their opening camera frames.
 That is what turns a heatmap into an explanation. The frames open in their own window, so
 they can sit beside the maps rather than covering them.
 
-Here one 13.5 mm cell out on the robot's left — x = 0.243, y = 0.109, in a 43 mm slab at
-table height — was crossed by four episodes of `grabbing-in-the-wild` (19, 32, 48 and 140),
-and their opening frames show the cube starting somewhere different every time. So this cell
-is transit: somewhere the arm passes through, not somewhere the task put it. Cells that *are*
-task-driven tell the opposite story — the same cube position frame after frame, because that
-is exactly where the cube was.
+Here the cell is x = 0.216, y = 0.068 — 13.5 mm, in the default 60 mm slab at table height —
+clicked in the comparison of `consistent-grabbing-merged` against `grabbing-in-the-wild`. It
+holds 234 frames, all from five episodes of `grabbing-in-the-wild` (6, 11, 14, 113 and 121);
+`consistent-grabbing-merged` never went there, which is why the red marker shows up in the
+diff panel too. Clicking marks the same cell on every panel, so one location can be read across
+the whole comparison at once.
 
-Note the red marker in both panels behind the pop-up: clicking marks the same cell on every
-panel, so you can read one location across the whole comparison at once.
+The opening frames split those five episodes cleanly in two. Episodes 113 and 121 start the
+way most do: arm parked, cube out on the mat, within about a centimetre of the parked pose
+drawn on the map. Episodes 6, 11 and 14 do not — they open with the arm already reaching out on
+the left, 10–12 cm from that pose, over the cube. None of the five starts *in* this cell; all of
+them reach it later in the episode. These are exactly the episodes that are not in the parked
+pose at frame 0, and the reason the drawn pose is a medoid rather than an average: they are a
+real minority, and they should not drag the arm on the map toward the middle of the table.
 
 ## Comparing two datasets
 
@@ -115,12 +131,15 @@ The defaults are a 60 mm slab at table height, 13.5 mm cells, and a log colour s
 distinct episodes; `--z-bounds`, `--bins`, `--panel-color` and `--no-log` override them.
 `--panel-color` also takes `count`, `dwell`, `tilt`, `tilt_spread`, `roll_spread` and
 `gripper`; `--source action` bins the commanded pose rather than the measured one; `--rerun`
-opens a 3D aggregate view instead. `python so101_fk.py --self-test` checks the kinematics
+opens a 3D aggregate view instead; `--robot skeleton` or `--robot none` replaces the CAD
+silhouette. `python so101_fk.py --self-test` checks the kinematics
 before you trust any of it.
 
 ## Files
 
-- `so101_fk.py` — URDF fetch, chain parsing, batched forward kinematics, joint-limit sampling.
+- `so101_fk.py` — URDF fetch, chain parsing, batched forward kinematics, joint-limit sampling,
+  and the CAD meshes (a dependency-free binary STL reader).
+- `robot_outline.py` — the robot's top-down silhouette, rasterised from those meshes.
 - `ee_coverage.py` — dataset loading, joint-unit handling, and the binning model.
 - `coverage_render.py` — static PNG export and the rerun 3D view.
 - `coverage_viewer.py` — the interactive window.

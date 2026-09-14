@@ -271,10 +271,113 @@ class UrdfChain:
         return self.fk(q)[:, :3, 3]
 
 
+def _origin_matrix(element: ET.Element) -> np.ndarray:
+    """The 4x4 transform of an element's <origin> (identity when absent)."""
+    origin_el = element.find("origin")
+    xyz = _floats(origin_el.get("xyz") if origin_el is not None else None, (0.0, 0.0, 0.0))
+    rpy = _floats(origin_el.get("rpy") if origin_el is not None else None, (0.0, 0.0, 0.0))
+    out = np.eye(4)
+    out[:3, :3] = _rpy_to_matrix(*rpy)
+    out[:3, 3] = xyz
+    return out
+
+
+def _axis_rotation(axis: np.ndarray, theta: float) -> np.ndarray:
+    """4x4 rotation about a unit axis -- the same Rodrigues step `UrdfChain.fk` uses."""
+    k = np.array([[0.0, -axis[2], axis[1]], [axis[2], 0.0, -axis[0]], [-axis[1], axis[0], 0.0]])
+    out = np.eye(4)
+    out[:3, :3] = np.eye(3) + np.sin(theta) * k + (1.0 - np.cos(theta)) * (k @ k)
+    return out
+
+
+def joint_limits_deg(urdf_path: str | Path) -> dict[str, tuple[float, float]]:
+    """Lower/upper limit of every limited joint, in degrees."""
+    root = ET.parse(str(urdf_path)).getroot()
+    out = {}
+    for element in root.findall("joint"):
+        limit_el = element.find("limit")
+        if limit_el is not None and limit_el.get("lower") and limit_el.get("upper"):
+            out[element.get("name")] = (np.rad2deg(float(limit_el.get("lower"))),
+                                        np.rad2deg(float(limit_el.get("upper"))))
+    return out
+
+
+def link_transforms(
+    urdf_path: str | Path, q_deg: dict[str, float], base_link: str = DEFAULT_BASE_LINK
+) -> dict[str, np.ndarray]:
+    """Pose of every link in the base frame, for one configuration.
+
+    Unlike `UrdfChain`, this walks the whole joint tree rather than one base-to-tip path. Drawing
+    the robot needs that: the moving jaw hangs off `gripper_link` as a side branch and would
+    otherwise be missing. Joints absent from `q_deg` are held at 0.
+    """
+    root = ET.parse(str(urdf_path)).getroot()
+    frames = {base_link: np.eye(4)}
+    pending = list(root.findall("joint"))
+    while pending:
+        placed = [e for e in pending if e.find("parent").get("link") in frames]
+        if not placed:  # whatever is left is not connected to the base
+            break
+        for element in placed:
+            pose = frames[element.find("parent").get("link")] @ _origin_matrix(element)
+            if element.get("type") in ("revolute", "continuous"):
+                axis_el = element.find("axis")
+                axis = _floats(axis_el.get("xyz") if axis_el is not None else None, (1.0, 0.0, 0.0))
+                axis = axis / (np.linalg.norm(axis) or 1.0)
+                pose = pose @ _axis_rotation(axis, np.deg2rad(q_deg.get(element.get("name"), 0.0)))
+            frames[element.find("child").get("link")] = pose
+            pending.remove(element)
+    return frames
+
+
+def read_binary_stl(path: str | Path) -> np.ndarray:
+    """(n, 3, 3) triangle vertices: 80-byte header, uint32 count, then 50 bytes per facet."""
+    data = Path(path).read_bytes()
+    n = int(np.frombuffer(data, dtype="<u4", count=1, offset=80)[0])
+    if len(data) != 84 + 50 * n:
+        raise ValueError(f"{path} is not a binary STL (its size does not match its facet count)")
+    facets = np.frombuffer(data, dtype=np.uint8, count=50 * n, offset=84).reshape(n, 50)
+    # Per facet: 12 bytes of normal, 36 bytes of three float32 xyz vertices, 2 attribute bytes.
+    return facets[:, 12:48].copy().view("<f4").reshape(n, 3, 3).astype(np.float64)
+
+
+_MESH_CACHE: dict[str, list[tuple[str, np.ndarray]]] = {}
+
+
+def load_visual_meshes(urdf_path: str | Path) -> list[tuple[str, np.ndarray]]:
+    """Every <visual> mesh as (link name, triangles in that link's frame). Cached per URDF.
+
+    The SO-101 URDF carries several visuals per link -- servo body, bracket, horn -- each with its
+    own origin, so all of them are read, not just the first.
+    """
+    urdf_path = Path(urdf_path)
+    key = str(urdf_path.resolve())
+    if key not in _MESH_CACHE:
+        root = ET.parse(str(urdf_path)).getroot()
+        meshes: list[tuple[str, np.ndarray]] = []
+        for link in root.findall("link"):
+            for visual in link.findall("visual"):
+                mesh_el = visual.find("geometry/mesh")
+                if mesh_el is None:
+                    continue
+                filename = mesh_el.get("filename", "").removeprefix("package://").removeprefix("file://")
+                triangles = read_binary_stl(urdf_path.parent / filename)
+                if mesh_el.get("scale"):
+                    triangles = triangles * _floats(mesh_el.get("scale"), (1.0, 1.0, 1.0))
+                transform = _origin_matrix(visual)
+                meshes.append((link.get("name"), triangles @ transform[:3, :3].T + transform[:3, 3]))
+        if not meshes:
+            raise FileNotFoundError(f"{urdf_path} has no mesh visuals")
+        _MESH_CACHE[key] = meshes
+    return _MESH_CACHE[key]
+
+
 def load_so101_chain(urdf_path: str | Path | None = None, tip_link: str = DEFAULT_TIP_LINK) -> UrdfChain:
     """Convenience: fetch the SO-101 URDF if no path is given, and parse its chain."""
     path = Path(urdf_path) if urdf_path is not None else ensure_so101_urdf()
-    return UrdfChain.from_file(path, tip_link=tip_link)
+    chain = UrdfChain.from_file(path, tip_link=tip_link)
+    chain.urdf_path = path  # kept so the robot can be drawn from the same file's meshes
+    return chain
 
 
 def _self_test(check_placo: bool) -> int:
