@@ -31,12 +31,18 @@ Updates are blitted: only the artists that actually change are redrawn, over a c
 That is what keeps a continuous drag smooth -- a full figure redraw costs ~100 ms, a blitted one
 ~25 ms. Pass `blit=False` (CLI `--no-blit`) to fall back to full redraws.
 
+When the datasets hold more than one task, a second window lists them with a checkbox each:
+every map, side view and colour limit is then built from the checked tasks' episodes only.
+It opens on its own for multi-task data; press `t` to bring it back after closing it.
+
 The frame is deliberately fixed -- axes limits never move, and with "fixed scale" checked the
 colour limits are re-derived only when the slab *thickness* changes, not when it translates, so
 two heights stay directly comparable.
 """
 
 from __future__ import annotations
+
+import contextlib
 
 import numpy as np
 
@@ -53,11 +59,16 @@ from coverage_render import (
 from ee_coverage import CHANNEL_LABELS, CHANNELS, CoverageModel, _diff_label, _short
 
 _HELP = ("hover a cell for its numbers · click to list its episodes · "
-         "↑/↓ step the slab · +/− thicken")
+         "↑/↓ step the slab · +/− thicken · t tasks")
 
 def _elide(text: str, max_len: int = 22) -> str:
     """Keep the tail, which is where recording runs differ (dates, suffixes)."""
     return text if len(text) <= max_len else "…" + text[-(max_len - 1):]
+
+
+def _elide_end(text: str, max_len: int) -> str:
+    """Keep the head -- a task description reads from the start."""
+    return text if len(text) <= max_len else text[: max_len - 1] + "…"
 
 
 def _radio_labels(names: list[str]) -> list[str]:
@@ -131,6 +142,9 @@ class CoverageViewer:
         self.camera = camera
         self._loaders: dict[str, object] = {}
         self._frames_fig = None
+        self._task_fig = None
+        self._task_widgets = ()
+        self._task_bulk = False
         self._diff_hint_shown = None
 
         # With more than one dataset loaded, show them all at once -- that side-by-side reading,
@@ -270,9 +284,12 @@ class CoverageViewer:
         self.fig.canvas.mpl_connect("button_press_event", self._on_click)
         self.fig.canvas.mpl_connect("key_press_event", self._on_key)
         self.fig.canvas.mpl_connect("resize_event", lambda _evt: self._invalidate_background())
+        self.fig.canvas.mpl_connect("close_event", self._on_close)
 
         self._layout_panels()
         self._refresh(full=True)
+        if len(model.tasks) > 1:
+            self.open_task_window()
 
     # --- panels ------------------------------------------------------------------------
 
@@ -453,6 +470,8 @@ class CoverageViewer:
         view = panel.view
         if int(view.counts.sum()) > 0:
             return ""
+        if self.model.task_filter is not None and not self.model.task_filter:
+            return "no tasks selected\n\npress t to pick some"
         if view.reverse_cells is None:
             return "no frames\nin this slab"
         b_name, a_name = (_short(n) for n in self.model.diff)
@@ -498,12 +517,14 @@ class CoverageViewer:
                 panel.im.set_norm(self.norm)
             panel.im.set_data(grid)
             if self.fixed_scale or not np.isfinite(grid).any():
-                panel.im.set_clim(*self._clim)
+                lo, hi = self._clim
             else:
                 lo, hi = float(np.nanmin(grid)), float(np.nanmax(grid))
-                if self.log and self.channel in LOG_CHANNELS:
-                    lo = max(lo, 1e-6)
-                panel.im.set_clim(lo, hi if hi > lo else lo + 1e-9)
+            # Clamped on both paths: with no tasks selected the fallback limits start at 0,
+            # which a log norm rejects.
+            if self.log and self.channel in LOG_CHANNELS:
+                lo = max(lo, 1e-6)
+            panel.im.set_clim(lo, hi if hi > lo else lo + 1e-9)
             panel.bg_im.set_data(background_grid(model, view, self.show_mask))
             panel.ax.set_title(self._panel_title(panel), fontsize=9)
             panel.note.set_text(self._empty_note(panel))
@@ -527,7 +548,7 @@ class CoverageViewer:
         # Said once, above the strip, rather than repeated in every panel title.
         self.suptitle.set_text(
             f"z ∈ [{self.z0:.3f}, {self.z1:.3f}) m  ·  {self.thickness * 1000:.0f} mm thick"
-            f"  ·  {model.cell_size_m * 1000:.1f} mm cells"
+            f"  ·  {model.cell_size_m * 1000:.1f} mm cells{self._task_summary()}"
         )
         self.grid_slider.valtext.set_text(
             f"{model.cell_size_m * 1000:.1f} mm cells ({model.bins}×{model.bins})"
@@ -537,6 +558,15 @@ class CoverageViewer:
         )
 
         self._draw(full)
+
+    def _task_summary(self) -> str:
+        """Suffix for the heading naming the task selection, empty when every task is shown."""
+        selected = self.model.task_filter
+        if selected is None:
+            return ""
+        if len(selected) == 1:
+            return f"  ·  task: {_elide_end(next(iter(selected)), 48)}"
+        return f"  ·  {len(selected)}/{len(self.model.tasks)} tasks"
 
     def _draw(self, full: bool):
         if not self.blit:
@@ -605,7 +635,9 @@ class CoverageViewer:
 
     def _on_key(self, event):
         """Step the slab with the keyboard: it is the fastest way to walk up the workspace."""
-        if event.key in ("up", "down"):
+        if event.key == "t":
+            self.open_task_window()
+        elif event.key in ("up", "down"):
             step = self.thickness if event.key == "up" else -self.thickness
             self.set_bounds(self.z0 + step, self.z1 + step)
         elif event.key in ("+", "=", "-", "_"):
@@ -634,6 +666,108 @@ class CoverageViewer:
         self._clear_markers()
         self._layout_panels()
         self._refresh(full=True)
+
+    # --- tasks -------------------------------------------------------------------------
+
+    def set_tasks(self, tasks):
+        """Show only the frames of `tasks` (task texts); None shows every task."""
+        if tasks is not None and set(tasks) >= set(self.model.tasks):
+            tasks = None  # everything checked is the unfiltered view -- say so in the heading
+        self.model.set_task_filter(tasks)
+        self._sync_task_checks()
+        self._clear_markers()
+        # Counts drop when tasks are removed, so the frozen scale has to follow the selection.
+        self._clim = self.model.clim(self.channel, self.thickness)
+        self._clim_thickness = self.thickness
+        self._refresh(full=True)
+
+    def _sync_task_checks(self):
+        """Make the picker's checkboxes match the model, when the filter was set from code."""
+        if not self._task_widgets:
+            return
+        checks = self._task_widgets[0]
+        selected = self.model.task_filter
+        self._task_bulk = True
+        try:
+            for i, (text, on) in enumerate(zip(self.model.tasks, checks.get_status(), strict=True)):
+                if on != (selected is None or text in selected):
+                    checks.set_active(i)
+        finally:
+            self._task_bulk = False
+        self._task_fig.canvas.draw_idle()
+
+    def open_task_window(self):
+        """A separate window with one checkbox per task, built from the model's task list."""
+        import matplotlib.pyplot as plt
+        from matplotlib.widgets import Button, CheckButtons
+
+        if self._task_fig is not None and plt.fignum_exists(self._task_fig.number):
+            with contextlib.suppress(Exception):
+                self._task_fig.canvas.manager.show()
+            return
+
+        tasks = self.model.tasks
+        if not tasks:
+            print("These datasets carry no task metadata; there is nothing to select.")
+            return
+        counts = self.model.task_counts()
+        selected = self.model.task_filter
+
+        row_h = 0.3  # inches per task row
+        height = min(1.1 + row_h * len(tasks), 10.0)
+        fig = plt.figure(figsize=(7.0, height))
+        fig.canvas.manager.set_window_title("SO-101 coverage — tasks")
+        bottom = 0.55 / height  # room for the all/none buttons
+        ax = fig.add_axes([0.02, bottom + 0.1 / height, 0.96, 1 - bottom - 0.5 / height])
+        ax.set_title("show episodes of these tasks", fontsize=9, loc="left")
+        labels = []
+        for text in tasks:
+            frames, eps = counts[text]
+            labels.append(f"{_elide_end(text, 70)}   ({eps} ep, {frames} fr)")
+        checks = CheckButtons(ax, labels,
+                              [selected is None or t in selected for t in tasks])
+        for label in checks.labels:
+            label.set_fontsize(8)
+        ax.set_facecolor("#fafafa")
+        for spine in ax.spines.values():
+            spine.set_visible(False)
+
+        def apply(_label=None):
+            if self._task_bulk:
+                return
+            status = checks.get_status()
+            self.set_tasks([t for t, on in zip(tasks, status, strict=True) if on])
+
+        def set_all(state: bool):
+            self._task_bulk = True
+            try:
+                for i, on in enumerate(checks.get_status()):
+                    if on != state:
+                        checks.set_active(i)
+            finally:
+                self._task_bulk = False
+            apply()
+
+        btn_h = 0.3 / height
+        b_all = Button(fig.add_axes([0.02, 0.12 / height, 0.14, btn_h]), "all")
+        b_none = Button(fig.add_axes([0.18, 0.12 / height, 0.14, btn_h]), "none")
+        b_all.on_clicked(lambda _evt: set_all(True))
+        b_none.on_clicked(lambda _evt: set_all(False))
+        checks.on_clicked(apply)
+
+        # Widgets are only weakly referenced by their callbacks; keep them alive here.
+        self._task_widgets = (checks, b_all, b_none)
+        self._task_fig = fig
+        fig.show()
+
+    def _on_close(self, _event):
+        """Closing the main window takes the task picker with it, so plt.show() returns."""
+        import matplotlib.pyplot as plt
+
+        if self._task_fig is not None:
+            plt.close(self._task_fig)
+            self._task_fig = None
+            self._task_widgets = ()
 
     def _clear_markers(self):
         for panel in self.panels:

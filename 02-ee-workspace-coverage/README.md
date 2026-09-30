@@ -103,6 +103,29 @@ on its own.
 An empty diff panel is an answer rather than a bug: the direction matters, and the panel
 says so explicitly and prints the flag to flip it.
 
+## Multitask datasets
+
+A dataset that mixes several tasks averages them all into one map, and that hides the thing
+you usually want to know: whether each task on its own covers its part of the workspace. So
+when the loaded data holds more than one task, a second window opens next to the viewer
+listing every task with its episode and frame counts.
+
+![filtering the coverage by task](assets/task_picker.png)
+
+Uncheck a task and every map, side view and colour scale is rebuilt from the remaining
+tasks' episodes only. Clicking a cell then pops up only those tasks' episodes, and the
+heading names the selection (`task: …` or `2/5 tasks`). Press `t` in the main window to reopen
+the list after closing it. Tasks are matched by their text rather than their index, so the
+same task lines up across two loaded datasets even when its index differs.
+
+```bash
+uv run --project $L python ee_coverage.py ssabats/object-placing-multitask-v4 --interactive
+```
+
+On `object-placing-multitask-v4` (424 episodes, 5 tasks) the two "place it on the grey coffee
+box" tasks on their own cover 28% of the reachable table-height slab, against 38% for the
+whole dataset. The console summary also prints the per-task frame and episode counts.
+
 ## Running it
 
 Everything runs against the sibling `lerobot` checkout's environment and adds no dependency.
@@ -144,3 +167,10 @@ before you trust any of it.
 - `coverage_render.py` — static PNG export and the rerun 3D view.
 - `coverage_viewer.py` — the interactive window.
 - `episode_frames.py` — decodes each episode's opening camera frame for the click pop-up.
+
+## The viewer in action
+
+Opening `object-placing-multitask-v4`, narrowing it to a couple of tasks, and clicking cells
+to see which episodes went there:
+
+<img src="assets/multitask_demo.gif" width="880" alt="the coverage viewer filtering a multitask dataset by task">

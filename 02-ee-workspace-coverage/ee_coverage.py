@@ -105,6 +105,8 @@ class EEPoses:
     episode_index: np.ndarray  # (N,)
     q_deg: np.ndarray  # (N, n_joints) the FK input, kept so the rest pose can be drawn
     fps: float
+    task_index: np.ndarray | None = None  # (N,) index into `tasks`
+    tasks: dict[int, str] = field(default_factory=dict)  # this dataset's task_index -> task text
 
     def __len__(self) -> int:
         return len(self.pos)
@@ -148,6 +150,11 @@ class _Binned:
     cell: np.ndarray  # (N,) flat iy * nx + ix, -1 outside the x-y extent
     ok_xy: np.ndarray  # (N,) bool
     z: np.ndarray
+    task_ok: np.ndarray | None = None  # (N,) bool, frames whose task passes the task filter
+
+    def __post_init__(self):
+        if self.task_ok is None:
+            self.task_ok = np.ones(len(self.z), dtype=bool)
 
 
 @dataclass
@@ -179,6 +186,9 @@ class CoverageModel:
     chain: object | None = None
     rest_pose: RestPose | None = None
     robot_style: str = "cad"  # how the arm is drawn: "cad", "skeleton" or "none"
+    # Task texts to keep, or None for every task. Matched by text rather than by index: task
+    # indices are per dataset, so the same task can carry different indices in two datasets.
+    task_filter: frozenset[str] | None = None
     _binned: dict[str, _Binned] = field(default_factory=dict, repr=False)
 
     @property
@@ -219,24 +229,66 @@ class CoverageModel:
         self.y_edges = np.linspace(y0, y1, bins + 1)
         self.z_edges_fine = np.linspace(self.z_edges_fine[0], self.z_edges_fine[-1], bins + 1)
 
-        for name, b in self._binned.items():
+        for b in self._binned.values():
             ix = _bin_index(b.poses.pos[:, 0], self.x_edges)
             iy = _bin_index(b.poses.pos[:, 1], self.y_edges)
             b.ok_xy = (ix >= 0) & (iy >= 0)
             b.cell = np.where(b.ok_xy, iy * bins + ix, 0).astype(np.int64)
-            self.side_xz[name], self.side_yz[name] = _side_histograms(
-                b.poses, self.x_edges, self.y_edges, self.z_edges_fine
-            )
-        if self.diff is not None:
-            label = _diff_label(*self.diff)
-            self.side_xz[label] = self.side_xz[self.diff[0]]
-            self.side_yz[label] = self.side_yz[self.diff[0]]
+        self._update_side_views()
 
         if self.reach_points is not None and self.reach_z_edges is not None:
             self.reach_volume = _bin_reach_points(
                 self.reach_points, self.reach_z_edges, self.y_edges, self.x_edges
             )
             _check_reachability(self)
+
+    def _update_side_views(self) -> None:
+        """Recompute the x-z / y-z projections for the current grid and task filter."""
+        for name, b in self._binned.items():
+            self.side_xz[name], self.side_yz[name] = _side_histograms(
+                b.poses, self.x_edges, self.y_edges, self.z_edges_fine, b.task_ok
+            )
+        if self.diff is not None:
+            label = _diff_label(*self.diff)
+            self.side_xz[label] = self.side_xz[self.diff[0]]
+            self.side_yz[label] = self.side_yz[self.diff[0]]
+
+    @property
+    def tasks(self) -> list[str]:
+        """Every task text across the loaded datasets, in first-seen order."""
+        seen: dict[str, None] = {}
+        for b in self._binned.values():
+            for text in b.poses.tasks.values():
+                seen.setdefault(text, None)
+        return list(seen)
+
+    def task_counts(self) -> dict[str, tuple[int, int]]:
+        """(frames, episodes) per task text, summed over the real datasets -- ignores the filter."""
+        out = {t: (0, 0) for t in self.tasks}
+        for b in self._binned.values():
+            p = b.poses
+            if p.task_index is None:
+                continue
+            for idx, text in p.tasks.items():
+                sel = p.task_index == idx
+                frames, eps = out[text]
+                out[text] = (frames + int(sel.sum()), eps + len(np.unique(p.episode_index[sel])))
+        return out
+
+    def set_task_filter(self, tasks) -> None:
+        """Restrict every query, side view and colour limit to frames of the given tasks.
+
+        `None` means every task. An empty collection is allowed and leaves every map empty.
+        """
+        self.task_filter = None if tasks is None else frozenset(tasks)
+        for b in self._binned.values():
+            p = b.poses
+            if self.task_filter is None or p.task_index is None:
+                b.task_ok = np.ones(len(p), dtype=bool)
+            else:
+                keep = [i for i, text in p.tasks.items() if text in self.task_filter]
+                b.task_ok = np.isin(p.task_index, keep)
+        self._update_side_views()
 
     def query(self, name: str, z0: float, z1: float) -> SliceView:
         """Channel grids for `name` over the slab [z0, z1)."""
@@ -273,7 +325,7 @@ class CoverageModel:
         # edge into the last bin -- otherwise the highest frame in the dataset would be
         # unreachable by any query.
         upper = (b.z <= z1) if z1 >= self.z_range[1] - 1e-12 else (b.z < z1)
-        mask = b.ok_xy & (b.z >= z0) & upper
+        mask = b.ok_xy & b.task_ok & (b.z >= z0) & upper
 
         channels, counts, tilt_std, approach_mean, episodes = _channel_grids(
             b.poses, b.cell, mask, self.shape, self.fps
@@ -366,8 +418,23 @@ def _load_frames(repo_id: str, source: str) -> tuple[pd.DataFrame, dict]:
     files = sorted((root / "data").rglob("*.parquet"))
     if not files:
         raise FileNotFoundError(f"No parquet data files under {root / 'data'}")
-    frames = pd.concat([pd.read_parquet(f, columns=[key, "episode_index"]) for f in files], ignore_index=True)
+    columns = [key, "episode_index"] + (["task_index"] if "task_index" in info["features"] else [])
+    frames = pd.concat([pd.read_parquet(f, columns=columns) for f in files], ignore_index=True)
     return frames, info
+
+
+def _load_tasks(repo_id: str) -> dict[int, str]:
+    """task_index -> task text, from meta/tasks.parquet (v3) or meta/tasks.jsonl (v2.x)."""
+    meta = _dataset_root(repo_id) / "meta"
+    if (meta / "tasks.parquet").exists():
+        df = pd.read_parquet(meta / "tasks.parquet")
+        # v3 stores the task text as the index; tolerate it having been reset to a column.
+        texts = df["task"] if "task" in df.columns else df.index.to_series()
+        return {int(i): str(t) for i, t in zip(df["task_index"], texts, strict=True)}
+    if (meta / "tasks.jsonl").exists():
+        rows = [json.loads(line) for line in (meta / "tasks.jsonl").read_text().splitlines() if line]
+        return {int(r["task_index"]): str(r["task"]) for r in rows}
+    return {}
 
 
 def _joint_columns(info: dict, key: str, joint_names: list[str]) -> list[int]:
@@ -465,6 +532,14 @@ def compute_ee_poses(
     gcol = _gripper_column(info, key)
     gripper = raw[:, gcol] if gcol is not None else np.zeros(len(raw))
 
+    task_index, tasks = None, {}
+    if "task_index" in frames.columns:
+        task_index = frames["task_index"].to_numpy().astype(np.int64)
+        tasks = _load_tasks(repo_id)
+        # Only list tasks that actually occur (an --episodes filter may have removed some), and
+        # never leave a frame pointing at an index the metadata does not name.
+        tasks = {int(i): tasks.get(int(i), f"task {int(i)}") for i in np.unique(task_index)}
+
     return EEPoses(
         name=repo_id,
         pos=pos,
@@ -475,6 +550,8 @@ def compute_ee_poses(
         episode_index=frames["episode_index"].to_numpy(),
         q_deg=body,
         fps=float(info["fps"]),
+        task_index=task_index,
+        tasks=tasks,
     )
 
 
@@ -586,11 +663,13 @@ def _channel_grids(
 
 
 def _side_histograms(
-    poses: EEPoses, x_edges: np.ndarray, y_edges: np.ndarray, z_edges_fine: np.ndarray
+    poses: EEPoses, x_edges: np.ndarray, y_edges: np.ndarray, z_edges_fine: np.ndarray,
+    mask: np.ndarray | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """x-z and y-z projections over every frame, indexed [z_bin, horizontal_bin] for imshow."""
-    xz, _, _ = np.histogram2d(poses.pos[:, 2], poses.pos[:, 0], bins=[z_edges_fine, x_edges])
-    yz, _, _ = np.histogram2d(poses.pos[:, 2], poses.pos[:, 1], bins=[z_edges_fine, y_edges])
+    """x-z and y-z projections over the (masked) frames, indexed [z_bin, horizontal_bin] for imshow."""
+    pos = poses.pos if mask is None else poses.pos[mask]
+    xz, _, _ = np.histogram2d(pos[:, 2], pos[:, 0], bins=[z_edges_fine, x_edges])
+    yz, _, _ = np.histogram2d(pos[:, 2], pos[:, 1], bins=[z_edges_fine, y_edges])
     return xz, yz
 
 
@@ -875,6 +954,11 @@ def summarize(model: CoverageModel) -> str:
                 )
             radius = np.linalg.norm(poses.pos, axis=1)
             lines.append(f"  radius (m): median {np.median(radius):.3f}  max {radius.max():.3f}")
+            if len(poses.tasks) > 1:
+                for idx, text in poses.tasks.items():
+                    sel = poses.task_index == idx
+                    lines.append(f"  task {idx}: {int(sel.sum())} frames, "
+                                 f"{len(np.unique(poses.episode_index[sel]))} episodes -- {text}")
             q = np.percentile(poses.tilt_deg, [25, 50, 75])
             lines.append(f"  approach tilt off vertical (deg): q25 {q[0]:.1f}  median {q[1]:.1f}  q75 {q[2]:.1f}")
 
