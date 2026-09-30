@@ -8,7 +8,7 @@ The catch: LIBERO's suites bundle many tasks together, and each demonstration is
 
 This isn't hypothetical — I trained ACT on the full multi-object `libero_object` suite with no language conditioning to check, and this is what it does:
 
-<video src="assets/act_no_language_indecisive.mp4" controls width="480"></video>
+<img src="assets/act_no_language_indecisive.gif" width="480" alt="act_no_language_indecisive">
 
 It doesn't fail cleanly. It hovers indecisively over the middle of the scene, never committing to any one object, and ends the episode having placed nothing in the basket. That's not a lack of capability, it's mode collapse: with several equally-valid-looking demonstrations for the same scene disagreeing on which object to grab, and no signal to tell them apart, the policy's least-bad option is to average across them — which produces motion that resembles all of the demonstrations and commits to none. The multimodality of the demonstration set is exactly what a language-free policy can't resolve.
 
@@ -35,7 +35,7 @@ Requires one small fix on top of stock `lerobot`: `split_dataset()` assumes per-
 
 What the task actually looks like:
 
-<video src="assets/dataset_episode_0.mp4" controls width="480"></video>
+<img src="assets/dataset_episode_0.gif" width="480" alt="dataset_episode_0">
 
 ## Policy: ACT
 
@@ -98,8 +98,8 @@ Concretely: with normalization actually working, the policy crosses **80% succes
 
 A clean success:
 
-<video src="assets/eval_success.mp4" controls width="480"></video>
+<img src="assets/eval_success.gif" width="480" alt="eval_success">
 
 A rollout that drifts off-plan but recovers — this is what the 22-step re-plan cadence buys you: the policy re-observes roughly once a second and corrects, rather than committing blindly to the full 100-step chunk:
 
-<video src="assets/eval_recovery.mp4" controls width="480"></video>
+<img src="assets/eval_recovery.gif" width="480" alt="eval_recovery">
