@@ -1,0 +1,423 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Live Task Switcher</title>
+<style>
+  :root {
+    --bg: #f6f6f4; --panel: #ffffff; --text: #1d1d1b; --muted: #6b6b66; --line: #e2e2dc;
+    --accent: #2f6fde; --accent-text: #ffffff; --ok: #1f8a4c; --warn: #b8740a; --bad: #c43d3d;
+    --log-bg: #15161a; --log-text: #d6d6d0; --chip: #eef2fb;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #141517; --panel: #1d1f22; --text: #ececea; --muted: #9a9a94; --line: #2e3034;
+      --accent: #5b8ef0; --accent-text: #0e1116; --ok: #4cc27f; --warn: #e0a640; --bad: #ec6b6b;
+      --log-bg: #0d0e10; --log-text: #cfcfc9; --chip: #232a38;
+    }
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 1100px; margin: 0 auto; padding: 20px 16px 40px; display: grid; gap: 16px;
+         grid-template-columns: minmax(0, 360px) minmax(0, 1fr); }
+  @media (max-width: 820px) { main { grid-template-columns: minmax(0, 1fr); } }
+  header { grid-column: 1 / -1; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  h1 { font-size: 20px; margin: 0; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 10px; }
+  section { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; min-width: 0; }
+  label { display: block; font-size: 13px; color: var(--muted); margin: 10px 0 4px; }
+  input, select, textarea { width: 100%; font: inherit; color: var(--text); background: var(--bg);
+         border: 1px solid var(--line); border-radius: 6px; padding: 7px 9px; }
+  textarea { resize: vertical; font-family: ui-monospace, monospace; font-size: 12px; }
+  .row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .check { display: flex; align-items: center; gap: 8px; color: var(--text); font-size: 14px; }
+  .check input { width: auto; }
+  details { margin-top: 12px; } summary { cursor: pointer; color: var(--muted); font-size: 13px; }
+  button { font: inherit; border: 1px solid var(--line); background: var(--panel); color: var(--text);
+           border-radius: 6px; padding: 8px 14px; cursor: pointer; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); font-weight: 600; }
+  button.danger { color: var(--bad); }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  .actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 14px; }
+  .pill { font-size: 12px; font-weight: 600; padding: 3px 10px; border-radius: 999px; border: 1px solid currentColor; }
+  .s-idle, .s-exited { color: var(--muted); } .s-loading, .s-resetting { color: var(--warn); }
+  .s-ready { color: var(--accent); } .s-running { color: var(--ok); } .s-failed { color: var(--bad); }
+  .current { font-size: 22px; font-weight: 600; margin: 4px 0 2px; overflow-wrap: anywhere; }
+  .hint { font-size: 13px; color: var(--muted); }
+  form.task { display: flex; gap: 8px; margin-top: 14px; }
+  form.task input { font-size: 16px; padding: 10px 12px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+  .chips button { background: var(--chip); border-color: transparent; font-size: 13px; padding: 6px 10px; text-align: left; }
+  .chips button.active { border-color: var(--accent); }
+  #log { background: var(--log-bg); color: var(--log-text); font: 12px/1.5 ui-monospace, monospace;
+         border-radius: 8px; padding: 10px; height: 340px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; }
+  #log .cmd { color: #7fb0ff; } #log .app { color: #e0a640; }
+  .error { color: var(--bad); font-size: 13px; min-height: 1.2em; margin-top: 8px; }
+  .right { display: grid; gap: 16px; min-width: 0; }
+  .live { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; }
+  @media (max-width: 640px) { .live { grid-template-columns: minmax(0, 1fr); } }
+  .pane { position: relative; aspect-ratio: 4 / 3; border-radius: 8px; overflow: hidden;
+          background: var(--log-bg); border: 1px solid var(--line); }
+  .pane img, .pane canvas { width: 100%; height: 100%; display: block; object-fit: contain; }
+  .pane .empty { position: absolute; inset: 0; display: grid; place-items: center; text-align: center;
+          color: var(--muted); font-size: 13px; padding: 12px; }
+  .pane .tag { position: absolute; left: 8px; top: 8px; font-size: 12px; color: #fff;
+          background: rgba(0,0,0,.45); padding: 2px 8px; border-radius: 4px; }
+  .camtabs { display: flex; gap: 6px; position: absolute; right: 8px; top: 8px; }
+  .camtabs button { font-size: 12px; padding: 2px 8px; background: rgba(0,0,0,.45); color: #fff; border-color: transparent; }
+  .camtabs button.active { background: var(--accent); color: var(--accent-text); }
+  .joints { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 6px; margin-top: 10px;
+          font: 12px/1.3 ui-monospace, monospace; }
+  @media (max-width: 640px) { .joints { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+  .joints div { background: var(--bg); border-radius: 6px; padding: 5px 7px; overflow: hidden; }
+  .joints span { display: block; color: var(--muted); font-size: 10px; text-overflow: ellipsis; overflow: hidden; white-space: nowrap; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Live task switcher</h1>
+    <span id="state" class="pill s-idle">idle</span>
+  </header>
+
+  <section id="setup">
+    <h2>Setup</h2>
+    <label for="model">Checkpoint</label>
+    <select id="model"></select>
+    <label for="task0">Starting task</label>
+    <input id="task0">
+
+    <label for="inference">Inference</label>
+    <select id="inference"><option value="rtc">RTC (real-time chunking)</option><option value="sync">Sync</option></select>
+    <div class="row">
+      <div><label for="n_action_steps">n_action_steps</label><input id="n_action_steps" type="number" min="1"></div>
+      <div><label for="fps">fps</label><input id="fps" type="number" min="1"></div>
+    </div>
+    <div class="row rtc-only">
+      <div><label for="execution_horizon">RTC execution horizon</label><input id="execution_horizon" type="number" min="1"></div>
+      <div><label for="queue_threshold">Queue threshold</label><input id="queue_threshold" type="number" min="1"></div>
+    </div>
+    <label for="duration">Run duration per Start, s (0 = until Reset/Stop)</label>
+    <input id="duration" type="number" min="0">
+    <label class="check"><input id="display_data" type="checkbox"> Show cameras in Rerun</label>
+
+    <details>
+      <summary>Robot &amp; cameras</summary>
+      <label for="robot_port">Port</label><input id="robot_port">
+      <label for="robot_id">Robot id</label><input id="robot_id">
+      <label for="cameras">Cameras</label><textarea id="cameras" rows="4"></textarea>
+      <label for="rename_map">Rename map</label><textarea id="rename_map" rows="3"></textarea>
+    </details>
+
+    <div class="actions">
+      <button id="launch" class="primary">Launch</button>
+      <button id="stop" class="danger">Shut down</button>
+    </div>
+    <div class="hint" style="margin-top:8px">Launch loads the policy and connects the robot; the arm stays still until Start.</div>
+  </section>
+
+  <div class="right">
+    <section>
+      <h2>Live view</h2>
+      <div class="live">
+        <div class="pane" id="camPane">
+          <img id="cam" alt="live camera stream" hidden>
+          <div class="empty" id="camEmpty">Camera stream appears once the rollout has connected the robot.</div>
+          <div class="camtabs" id="camTabs"></div>
+        </div>
+        <div class="pane" id="robotPane">
+          <div class="empty" id="robotEmpty">Loading the SO-101 model…</div>
+          <span class="tag">SO-101 · measured joints</span>
+        </div>
+      </div>
+      <div class="joints" id="joints"></div>
+    </section>
+    <section>
+      <h2>Task</h2>
+      <div class="hint">The policy is following</div>
+      <div id="current" class="current">—</div>
+      <div class="actions">
+        <button id="start" class="primary">Start</button>
+        <button id="reset">Reset (go home, restore starting task)</button>
+      </div>
+      <form class="task" id="taskForm">
+        <input id="taskInput" placeholder="Type a new instruction and press Enter" autocomplete="off">
+        <button class="primary" type="submit">Send</button>
+      </form>
+      <div class="chips" id="chips"></div>
+      <div class="hint" id="chipsHint" style="margin-top:6px"></div>
+      <div class="error" id="error"></div>
+    </section>
+    <section>
+      <h2>Rollout output</h2>
+      <pre id="log"></pre>
+    </section>
+  </div>
+</main>
+
+<script type="importmap">
+{ "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+    "three/examples/jsm/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/",
+    "urdf-loader": "https://cdn.jsdelivr.net/npm/urdf-loader@0.12.6/src/URDFLoader.js"
+} }
+</script>
+<script type="module">
+const $ = (id) => document.getElementById(id);
+const FIELDS = ["n_action_steps", "fps", "execution_horizon", "queue_threshold", "duration",
+                "robot_port", "robot_id", "cameras", "rename_map", "inference"];
+let since = 0, state = "idle", currentTask = "";
+
+async function api(path, body) {
+  const res = await fetch(path, body === undefined ? {} :
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const data = await res.json();
+  if (data.ok === false) throw new Error(data.error);
+  return data;
+}
+function showError(msg) { $("error").textContent = msg || ""; }
+
+function renderChips(tasks) {
+  const box = $("chips");
+  box.replaceChildren(...tasks.map((t) => {
+    const b = document.createElement("button");
+    b.type = "button"; b.textContent = t; b.dataset.task = t;
+    b.onclick = () => (state === "idle" || state === "exited" || state === "failed")
+      ? ($("task0").value = t) : sendTask(t);
+    return b;
+  }));
+  $("chipsHint").textContent = tasks.length
+    ? "Training tasks — exact wording the policy saw. Click to switch (or to set the starting task before launch)."
+    : "No training tasks found for this checkpoint (dataset not in the local cache).";
+  markActiveChip();
+}
+function markActiveChip() {
+  for (const b of $("chips").children) b.classList.toggle("active", b.dataset.task === currentTask);
+}
+async function loadTasks() {
+  const { tasks } = await api("/api/tasks?model=" + encodeURIComponent($("model").value));
+  renderChips(tasks);
+}
+
+async function init() {
+  const { defaults, models, urdf } = await api("/api/options");
+  const sel = $("model");
+  const list = models.includes(defaults.model) ? models : [defaults.model, ...models];
+  for (const m of list) {
+    const o = document.createElement("option");
+    o.value = m; o.textContent = m.replace(/^outputs\/train\//, "").replace(/\/pretrained_model$/, "");
+    sel.append(o);
+  }
+  sel.value = defaults.model;
+  $("task0").value = defaults.task;
+  for (const f of FIELDS) $(f).value = defaults[f];
+  $("display_data").checked = defaults.display_data;
+  sel.onchange = loadTasks;
+  $("inference").onchange = syncRtc; syncRtc();
+  await loadTasks();
+  poll();
+  initRobotView(urdf).catch((e) => ($("robotEmpty").textContent = "Could not load the 3D model: " + e.message));
+}
+function syncRtc() {
+  for (const el of document.querySelectorAll(".rtc-only")) el.style.display = $("inference").value === "rtc" ? "" : "none";
+}
+
+function render() {
+  const pill = $("state");
+  pill.textContent = state; pill.className = "pill s-" + state;
+  const alive = !["idle", "exited", "failed"].includes(state);
+  $("launch").disabled = alive;
+  $("stop").disabled = !alive;
+  $("start").disabled = state !== "ready";
+  $("reset").disabled = !(state === "running" || state === "ready");
+  for (const el of document.querySelectorAll("#setup input, #setup select, #setup textarea"))
+    el.disabled = alive;
+  $("current").textContent = currentTask || "—";
+  markActiveChip();
+}
+
+function appendLog(lines) {
+  if (!lines.length) return;
+  const log = $("log");
+  const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
+  for (const line of lines) {
+    const span = document.createElement("span");
+    if (line.startsWith("> ") || line.startsWith("$ ")) span.className = "cmd";
+    else if (line.startsWith("[app]")) span.className = "app";
+    span.textContent = line + "\n";
+    log.append(span);
+  }
+  while (log.childNodes.length > 2000) log.firstChild.remove();
+  if (atBottom) log.scrollTop = log.scrollHeight;
+}
+
+async function poll() {
+  try {
+    const s = await api("/api/state?since=" + since);
+    since = s.seq; state = s.state; currentTask = s.task;
+    appendLog(s.lines); render(); renderCamTabs(s.cameras);
+  } catch (e) { /* server restarting; keep polling */ }
+  setTimeout(poll, 400);
+}
+
+async function act(fn) { showError(""); try { await fn(); } catch (e) { showError(e.message); } }
+async function sendTask(task) {
+  await act(() => api("/api/task", { task }));
+}
+
+$("launch").onclick = () => act(() => {
+  const cfg = { model: $("model").value, task: $("task0").value, display_data: $("display_data").checked };
+  for (const f of FIELDS) cfg[f] = $(f).value;
+  return api("/api/launch", cfg);
+});
+$("stop").onclick = () => act(() => api("/api/stop", {}));
+$("start").onclick = () => act(() => api("/api/start", {}));
+$("reset").onclick = () => act(() => api("/api/reset", {}));
+$("taskForm").onsubmit = (ev) => {
+  ev.preventDefault();
+  const t = $("taskInput").value.trim();
+  if (t) sendTask(t).then(() => ($("taskInput").value = ""));
+};
+// ---------------------------------------------------------------- live camera
+let camera = null;
+function renderCamTabs(cameras) {
+  const alive = !["idle", "exited", "failed"].includes(state);
+  if (!alive || !cameras.length) {
+    if (camera) { camera = null; $("cam").removeAttribute("src"); }
+    $("cam").hidden = true; $("camEmpty").hidden = false; $("camTabs").replaceChildren();
+    return;
+  }
+  if (!cameras.includes(camera)) selectCamera(cameras.includes("front") ? "front" : cameras[0]);
+  if ($("camTabs").children.length !== cameras.length) {
+    $("camTabs").replaceChildren(...cameras.map((c) => {
+      const b = document.createElement("button");
+      b.type = "button"; b.textContent = c; b.dataset.cam = c;
+      b.onclick = () => selectCamera(c);
+      return b;
+    }));
+  }
+  for (const b of $("camTabs").children) b.classList.toggle("active", b.dataset.cam === camera);
+}
+function selectCamera(name) {
+  camera = name;
+  // Cache-buster: a fresh multipart connection per selection.
+  $("cam").src = `/stream/${encodeURIComponent(name)}.mjpg?t=${Date.now()}`;
+  $("cam").hidden = false; $("camEmpty").hidden = true;
+}
+
+// ---------------------------------------------------------------- URDF view
+// Same loader and conventions as huggingface/lerobot-dataset-visualizer (urdf-viewer.tsx):
+// urdf-loader + STL meshes, Z-up robot rotated -90° about X into three.js' Y-up world,
+// joint angles in degrees from the SO-101 (use_degrees=True) converted to radians.
+async function initRobotView(urdfUrl) {
+  if (!urdfUrl) { $("robotEmpty").textContent = "No SO-101 URDF in the local cache (see the app's terminal)."; return; }
+  const THREE = await import("three");
+  const { OrbitControls } = await import("three/examples/jsm/controls/OrbitControls.js");
+  const { STLLoader } = await import("three/examples/jsm/loaders/STLLoader.js");
+  const { default: URDFLoader } = await import("urdf-loader");
+
+  const pane = $("robotPane");
+  const renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setPixelRatio(window.devicePixelRatio);
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.shadowMap.enabled = true;
+  pane.prepend(renderer.domElement);
+
+  const scene = new THREE.Scene();
+  const dark = matchMedia("(prefers-color-scheme: dark)");
+  const setBg = () => (scene.background = new THREE.Color(dark.matches ? "#141c2e" : "#eef0f3"));
+  setBg(); dark.addEventListener("change", setBg);
+
+  const cam = new THREE.PerspectiveCamera(40, 4 / 3, 0.01, 50);
+  cam.position.set(0.35, 0.3, 0.35);
+  const controls = new OrbitControls(cam, renderer.domElement);
+  controls.enableDamping = true;
+
+  scene.add(new THREE.HemisphereLight(0xffffff, 0x445066, 1.4));
+  const key = new THREE.DirectionalLight(0xfff2e3, 2.2);
+  key.position.set(1.2, 2, 1.2); key.castShadow = true;
+  key.shadow.mapSize.set(1024, 1024);
+  Object.assign(key.shadow.camera, { left: -0.5, right: 0.5, top: 0.5, bottom: -0.5 });
+  scene.add(key);
+  const fill = new THREE.DirectionalLight(0xbfd9ff, 0.6);
+  fill.position.set(-1.5, 0.8, -0.8); scene.add(fill);
+  const grid = new THREE.GridHelper(1, 20, 0x7a8394, 0x5a6272);
+  grid.material.opacity = 0.35; grid.material.transparent = true; scene.add(grid);
+  const floor = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), new THREE.ShadowMaterial({ opacity: 0.18 }));
+  floor.rotation.x = -Math.PI / 2; floor.receiveShadow = true; scene.add(floor);
+
+  const loader = new URDFLoader();
+  const stl = new STLLoader();
+  loader.loadMeshCb = (url, manager, done) => stl.load(url, (geometry) => {
+    const servo = url.includes("sts3215");
+    const mesh = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({
+      color: servo ? "#171a20" : "#e9e6df", metalness: servo ? 0.15 : 0.05, roughness: servo ? 0.75 : 0.55,
+    }));
+    mesh.castShadow = true;
+    // Wrapped in a Group so urdf-loader does not swap in the URDF's flat colour.
+    const group = new THREE.Group(); group.add(mesh); done(group);
+  }, undefined, (err) => done(null, err));
+
+  const robot = await new Promise((resolve, reject) => loader.load(urdfUrl, resolve, undefined, reject));
+  robot.rotateOnAxis(new THREE.Vector3(1, 0, 0), -Math.PI / 2);
+  scene.add(robot);
+  $("robotEmpty").hidden = true;
+
+  // Frame the arm once its meshes have arrived (URDFs carry a world offset).
+  const fit = () => {
+    const box = new THREE.Box3().setFromObject(robot);
+    if (box.isEmpty()) return false;
+    const center = box.getCenter(new THREE.Vector3());
+    const size = box.getSize(new THREE.Vector3()).length();
+    controls.target.copy(center);
+    cam.position.copy(center).add(new THREE.Vector3(0.9, 0.55, 0.9).multiplyScalar(size));
+    grid.position.y = floor.position.y = box.min.y;
+    return true;
+  };
+  loader.manager.onLoad = fit;
+  setTimeout(fit, 2000);  // in case every mesh came from cache before onLoad was hooked
+
+  const limits = Object.fromEntries(Object.entries(robot.joints)
+    .filter(([, j]) => j.jointType === "revolute").map(([n, j]) => [n, [j.limit.lower, j.limit.upper]]));
+  const toRad = (name, value) => name === "gripper"
+    // Gripper is RANGE_0_100 (closed..open): spread it over the URDF's jaw limits.
+    ? limits.gripper[0] + (value / 100) * (limits.gripper[1] - limits.gripper[0])
+    : (value * Math.PI) / 180;
+
+  const events = new EventSource("/events");
+  events.onmessage = (ev) => {
+    const joints = JSON.parse(ev.data);
+    for (const [name, value] of Object.entries(joints)) if (name in robot.joints) robot.setJointValue(name, toRad(name, value));
+    renderJoints(joints);
+  };
+
+  const resize = () => {
+    const { clientWidth: w, clientHeight: h } = pane;
+    renderer.setSize(w, h, false); cam.aspect = w / h; cam.updateProjectionMatrix();
+  };
+  new ResizeObserver(resize).observe(pane); resize();
+  renderer.setAnimationLoop(() => { controls.update(); renderer.render(scene, cam); });
+}
+
+function renderJoints(joints) {
+  const box = $("joints");
+  const names = Object.keys(joints);
+  if (box.children.length !== names.length) {
+    box.replaceChildren(...names.map((n) => {
+      const d = document.createElement("div");
+      d.innerHTML = `<span></span><b></b>`; d.firstChild.textContent = n; d.title = n;
+      return d;
+    }));
+  }
+  names.forEach((n, i) => {
+    box.children[i].lastChild.textContent = joints[n].toFixed(1) + (n === "gripper" ? "%" : "°");
+  });
+}
+
+init();
+</script>
+</body>
+</html>

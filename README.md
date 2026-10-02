@@ -8,4 +8,5 @@ Each numbered folder is one experiment/chapter, with its own write-up and any sc
 
 1. [Train ACT on a single LIBERO task](01-train-act-on-libero-object/README.md)
 2. [Visualising end-effector workspace coverage](02-ee-workspace-coverage/README.md)
-3. [Lessons from a real robot: SO-101](03-data-language-rtc/README.md)
+3. [Data before the model: lessons from a real SO-101](03-data-before-model/README.md)
+4. [Language: one model, several tasks](04-language-multitask/README.md)

@@ -1,13 +1,7 @@
-# 3. Lessons from a real robot: SO-101
+# 3. Data before the model: lessons from a real SO-101
 
-Chapters 1 and 2 ran in simulation and on recorded data. This chapter is what I learned
-recording, training and rolling out policies on a real SO-101 arm:
-
-1. **When the policy misbehaves, change the data** — recovery episodes on a single task (ACT).
-2. **Language: one model, several tasks** — SmolVLA on a five-task dataset. *(coming next)*
-3. **Inference with RTC** — reacting fast vs committing. *(coming next)*
-
-## 1. When the policy misbehaves, change the data
+Chapters 1 and 2 ran in simulation and on recorded data. From here on it is a real SO-101 arm,
+and the first lesson it taught me is about data, not models.
 
 When a rollout goes wrong, the first question is not *"what is wrong with the model?"* but
 *"which situation is this that the data never showed?"*. An imitation policy can only reproduce
@@ -17,7 +11,7 @@ covered. The fix is to record that state.
 **Task:** *"Grab the object and drop it inside the cube"*: pick up the orange piece and drop it
 in the box behind it. ACT, front and wrist cameras, 30 fps.
 
-### The failure: stuck next to the object
+## The failure: stuck next to the object
 
 My first 60 demonstrations
 ([`…consistent-grabbing-merged`](https://huggingface.co/datasets/ssabats/object-dropping-cube-consistent-grabbing-merged))
@@ -28,7 +22,7 @@ hovers beside the object with the gripper half open, for over a minute.
 That is not a broken model. No demonstration ever missed, so *"gripper beside the object,
 nothing in it"* simply is not in the data, and neither is the way out of it.
 
-### The fix: recovery episodes
+## The fix: recovery episodes
 
 I recorded 24 episodes that *start* in failure: arm placed by hand beside the object, shifted
 sideways or half on top of it, then backing off, re-centring and grasping
@@ -40,7 +34,7 @@ comes back from above and grasps.
 
 <img src="assets/recovery_demo_episode.gif" width="440" alt="recovery demonstration: the gripper starts on top of the object off-centre, backs off, re-approaches from above, grasps and drops it in the box">
 
-### The result
+## The result
 
 The two models differ only in the training data: the same 60 episodes, plus the 24 recovery
 episodes on the right. Both clips start right after a missed grasp.
@@ -55,7 +49,7 @@ recovery episodes add only about 3% new workspace cells. They don't take the gri
 new. They show familiar places in an unfamiliar *situation* (misaligned, empty-handed) together
 with the action that fixes it, and a map of positions cannot show that.
 
-### Takeaways
+## Takeaways
 
 - **A failing rollout is a question about the data.** Find the state it got stuck in, then
   ask whether any demonstration ever went through it.
